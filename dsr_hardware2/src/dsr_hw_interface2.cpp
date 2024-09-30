@@ -252,6 +252,22 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
             RCLCPP_INFO(rclcpp::get_logger("dsr_hw_interface2"),"    [init]::read %d-pos: %7.3f", i, g_joints[i].cmd);
             m_fCmd_[i] = g_joints[i].cmd;
         }
+
+        // Variable initialisation
+        string version   = "v1.0";
+        float  period    = 0.001;
+        int    losscount = 4;
+
+        cout << "Connecting to real-time control" << endl;
+        Drfl.connect_rt_control(m_host);
+        cout << "Connected" << endl;
+        cout << "Setting up real-time control" << endl;
+        Drfl.set_rt_control_output(version, period, losscount);
+        cout << "Done" << endl;
+        cout << "Starting real-time control" << endl;
+        Drfl.start_rt_control();
+        cout << "Started" << endl;
+
         return CallbackReturn::SUCCESS;
     }
     RCLCPP_ERROR(rclcpp::get_logger("dsr_hw_interface2"),"    DSRInterface::init() DRCF connecting ERROR!!!");
@@ -346,11 +362,6 @@ return_type DRHWInterface::read(const rclcpp::Time & /*time*/, const rclcpp::Dur
 
 return_type DRHWInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
-    // Variable initialisation
-    string version   = "v1.0";
-    float  period    = 0.001;
-    int    losscount = 4;
-
     float vel[6]       = {5, 5, 5, 5, 5, 5};  // Joint limits
     float acc[6]       = {50, 50, 50, 50, 50, 50};
     float vel_limit[6] = {100, 100, 100, 100, 100, 100};
@@ -372,12 +383,14 @@ return_type DRHWInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
     TraParam  tra;
     PlanParam plan;
 
-    std::this_thread::sleep_for(std::chrono::microseconds(1000));
+    std::this_thread::sleep_for(std::chrono::seconds(20));
+    // std::this_thread::sleep_for(std::chrono::microseconds(1000));
+
     // cout << endl << endl << "Options: " << endl;
     // cout << " - q: quit" << endl;
     // cout << " - 1: connect real-time control" << endl;
     // cout << " - 2: setup real-time control" << endl;
-    // cout << " - 3: start real-time control" << endl;
+    // cout << " - 3: start real-time control" <<W endl;
     // cout << " - 4: stop real-time control" << endl;
     // cout << " - 5: test servoj_rt() function" << endl;
     // cout << " - 7: test speedj_rt() function" << endl;
@@ -387,124 +400,7 @@ return_type DRHWInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
     // cin >> ch;
     // cout << "Selected key: " << ch << endl << endl;
     char ch = '9';
-    cout << "Connecting to real-time control" << endl;
-    Drfl.connect_rt_control("172.0.0.1");
-    cout << "Connected" << endl;
-    cout << "Setting up real-time control" << endl;
-    Drfl.set_rt_control_output(version, period, losscount);
-    cout << "Done" << endl;
-    cout << "Starting real-time control" << endl;
-    Drfl.start_rt_control();
-    cout << "Started" << endl;
-
     switch (ch) {
-        case 'q':
-            cout << "Stopping real-time control" << endl;
-            Drfl.stop_rt_control();
-            cout << "Stopped" << endl;
-            break;
-        case '1':
-            cout << "Connecting to real-time control" << endl;
-            Drfl.connect_rt_control("172.0.0.1");
-            cout << "Connected" << endl;
-            break;
-        case '2':
-            cout << "Setting up real-time csontrol" << endl;
-            Drfl.set_rt_control_output(version, period, losscount);
-            cout << "Done" << endl;
-            break;
-
-        case '3':
-            cout << "Starting real-time control" << endl;
-            Drfl.start_rt_control();
-            cout << "Started" << endl;
-            break;
-
-        case '4':
-            cout << "Stopping real-time control" << endl;
-            Drfl.stop_rt_control();
-            cout << "Stopped" << endl;
-            break;
-
-        case '5':
-            cout << "servoj_rt() demo " << endl;
-            cout << "> Setting limits" << endl;
-            Drfl.set_velj_rt(vel);
-            Drfl.set_accj_rt(acc);
-            Drfl.set_velx_rt(100, 10);
-            Drfl.set_accx_rt(200, 20);    cin >> ch;
-
-            cout << "> Performing homing motion" << endl;
-            Drfl.movej(home, 60, 30);
-
-            cout << "> Set safety mode SAFETY_MODE_AUTONOMOUS, "
-                    "SAFETY_MODE_EVENT_MOVE"
-                    << endl;
-            Drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
-
-            cout << "> Planning motion" << endl;
-            count = 0;
-            time  = 0;
-            configure_plan_parameters(&plan);
-            plan_trajectory(&plan);
-
-            cout << "> Executing motion" << endl;
-            while (1) {
-                time     = (++count) * st;
-                tra.time = time;
-                generate_trajectory_sample(&plan, &tra);
-
-                for (int i = 0; i < 6; i++) tra.acc[i] = None;
-
-                Drfl.servoj_rt(tra.pos, tra.vel, tra.acc, st * ratio);
-
-                std::this_thread::sleep_for(std::chrono::microseconds(10000));
-            }
-            cout << "> Completed" << endl;
-            break;
-
-        case '7':
-            cout << "speedj_rt() demo " << endl;
-            cout << "> Setting limits" << endl;
-            Drfl.set_velj_rt(vel_limit);
-            Drfl.set_accj_rt(acc_limit);
-
-            cout << "> Performing homing motion" << endl;
-            Drfl.movej(home, 30, 30);
-
-            cout << "> Set safety mode SAFETY_MODE_AUTONOMOUS, "
-                    "SAFETY_MODE_EVENT_MOVE"
-                    << endl;
-            Drfl.set_safety_mode(
-                    SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE
-            );  // if this is removed the robot stops frequently
-
-            cout << "> Planning motion" << endl;
-            count = 0;
-            time  = 0;
-            configure_plan_parameters(&plan);
-            plan_trajectory(&plan);
-
-            cout << "> Executing motion" << endl;
-            while (1) {
-                time     = (++count) * st;
-                tra.time = time;
-                generate_trajectory_sample(&plan, &tra);
-
-                for (int i = 0; i < 6; i++) tra.acc[i] = None;
-
-                Drfl.speedj_rt(tra.vel, tra.acc, 0.01);
-
-                if (time > plan.time) {
-                    time = 0;
-                    Drfl.stop(STOP_TYPE_SLOW);
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::microseconds(10000));
-            }
-            cout << "> Completed" << endl;
-            break;
-
         case '9':  // torque
             cout << "torque_rt() demo " << endl;
             cout << "> Setting limits" << endl;
