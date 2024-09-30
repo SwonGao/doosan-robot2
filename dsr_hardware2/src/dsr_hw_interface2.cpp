@@ -193,6 +193,7 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
     {
         usleep(nDelay);
     }
+    std::cout << "m_host, m_port" << m_host << "," << m_port << std::endl;
     if(Drfl.open_connection(m_host, m_port))
     {
         RCLCPP_INFO(rclcpp::get_logger("dsr_hw_interface2"),"_______________________________________________\n"); 
@@ -234,7 +235,7 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
         // end changes 
 
         //--- Check Robot State : STATE_STANDBY ---               
-        while ((Drfl.GetRobotState() != STATE_STANDBY || !g_bHasControlAuthority)){
+        while ((Drfl.GetRobotState() != STATE_STANDBY)){
             usleep(nDelay);
         }
 
@@ -372,19 +373,29 @@ return_type DRHWInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
     PlanParam plan;
 
     std::this_thread::sleep_for(std::chrono::microseconds(1000));
-    cout << endl << endl << "Options: " << endl;
-    cout << " - q: quit" << endl;
-    cout << " - 1: connect real-time control" << endl;
-    cout << " - 2: setup real-time control" << endl;
-    cout << " - 3: start real-time control" << endl;
-    cout << " - 4: stop real-time control" << endl;
-    cout << " - 5: test servoj_rt() function" << endl;
-    cout << " - 7: test speedj_rt() function" << endl;
+    // cout << endl << endl << "Options: " << endl;
+    // cout << " - q: quit" << endl;
+    // cout << " - 1: connect real-time control" << endl;
+    // cout << " - 2: setup real-time control" << endl;
+    // cout << " - 3: start real-time control" << endl;
+    // cout << " - 4: stop real-time control" << endl;
+    // cout << " - 5: test servoj_rt() function" << endl;
+    // cout << " - 7: test speedj_rt() function" << endl;
     cout << " - 9: test torquej_rt() function" << endl;
-    cout << "input key: ";
-    char ch;
-    cin >> ch;
-    cout << "Selected key: " << ch << endl << endl;
+    // cout << "input key: ";
+    // char ch;
+    // cin >> ch;
+    // cout << "Selected key: " << ch << endl << endl;
+    char ch = '9';
+    cout << "Connecting to real-time control" << endl;
+    Drfl.connect_rt_control("172.0.0.1");
+    cout << "Connected" << endl;
+    cout << "Setting up real-time control" << endl;
+    Drfl.set_rt_control_output(version, period, losscount);
+    cout << "Done" << endl;
+    cout << "Starting real-time control" << endl;
+    Drfl.start_rt_control();
+    cout << "Started" << endl;
 
     switch (ch) {
         case 'q':
@@ -394,7 +405,7 @@ return_type DRHWInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
             break;
         case '1':
             cout << "Connecting to real-time control" << endl;
-            Drfl.connect_rt_control("192.168.127.100");
+            Drfl.connect_rt_control("172.0.0.1");
             cout << "Connected" << endl;
             break;
         case '2':
