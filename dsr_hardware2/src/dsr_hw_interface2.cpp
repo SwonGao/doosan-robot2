@@ -23,7 +23,11 @@
 #include <unistd.h>     
 #include <math.h>
 #include "../../common2/include/DRFLEx.h"
+
+#include "commons.hpp"
+
 using namespace DRAFramework;
+
 rclcpp::Node::SharedPtr s_node_ = nullptr;
 rclcpp::Node::SharedPtr m_node_ = nullptr; //ROS2
 CDRFLEx Drfl;
@@ -168,16 +172,18 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
     RCLCPP_INFO(rclcpp::get_logger("dsr_hw_interface2"),"    INITAILIZE");
     RCLCPP_INFO(rclcpp::get_logger("dsr_hw_interface2"),"_______________________________________________\n"); 
     //--- doosan API's call-back fuctions : Only work within 50msec in call-back functions
+    Drfl.set_on_monitoring_state(DSRInterface::OnMonitoringStateCB);
+    Drfl.set_on_monitoring_access_control(DSRInterface::OnMonitoringAccessControlCB);
     Drfl.set_on_tp_initializing_completed(DSRInterface::OnTpInitializingCompletedCB);
+    Drfl.set_on_log_alarm(DSRInterface::OnLogAlarm);
+
     Drfl.set_on_homming_completed(DSRInterface::OnHommingCompletedCB);
-    Drfl.set_on_program_stopped(DSRInterface::OnProgramStoppedCB);
     Drfl.set_on_monitoring_modbus(DSRInterface::OnMonitoringModbusCB);
     Drfl.set_on_monitoring_data(DSRInterface::OnMonitoringDataCB);           // Callback function in M2.4 and earlier
     Drfl.set_on_monitoring_ctrl_io(DSRInterface::OnMonitoringCtrlIOCB);       // Callback function in M2.4 and earlier
-    Drfl.set_on_monitoring_state(DSRInterface::OnMonitoringStateCB);
-    Drfl.set_on_monitoring_access_control(DSRInterface::OnMonitoringAccessControlCB);
-    Drfl.set_on_log_alarm(DSRInterface::OnLogAlarm);
     
+    Drfl.set_on_program_stopped(DSRInterface::OnProgramStoppedCB);
+
     m_node_ = rclcpp::Node::make_shared("dsr_hw_interface_update");
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_default));
     m_joint_state_pub_ = m_node_->create_publisher<sensor_msgs::msg::JointState>("joint_states", qos);
@@ -199,8 +205,7 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
 
         //--- Get version -------------------------------------            
         SYSTEM_VERSION tSysVerion = {'\0', };
-        assert(Drfl.get_system_version(&tSysVerion));
-
+        assert(Drfl.get_system_version(&tSysVerion));        
         //--- Get DRCF version & convert to integer  ----------            
         m_nVersionDRCF = 0; 
         int k=0;
@@ -223,8 +228,13 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
             Drfl.setup_monitoring_version(1);                        //Enabling extended monitoring functions 
         }
 
+        // make changes here:
+        Drfl.set_robot_control(CONTROL_SERVO_ON);
+        Drfl.set_digital_output(GPIO_CTRLBOX_DIGITAL_INDEX_10, TRUE);
+        // end changes 
+
         //--- Check Robot State : STATE_STANDBY ---               
-        while ((Drfl.GetRobotState() != STATE_STANDBY)){
+        while ((Drfl.GetRobotState() != STATE_STANDBY || !g_bHasControlAuthority)){
             usleep(nDelay);
         }
 
@@ -241,7 +251,6 @@ CallbackReturn DRHWInterface::on_init(const hardware_interface::HardwareInfo & i
             RCLCPP_INFO(rclcpp::get_logger("dsr_hw_interface2"),"    [init]::read %d-pos: %7.3f", i, g_joints[i].cmd);
             m_fCmd_[i] = g_joints[i].cmd;
         }
-
         return CallbackReturn::SUCCESS;
     }
     RCLCPP_ERROR(rclcpp::get_logger("dsr_hw_interface2"),"    DSRInterface::init() DRCF connecting ERROR!!!");
@@ -336,7 +345,215 @@ return_type DRHWInterface::read(const rclcpp::Time & /*time*/, const rclcpp::Dur
 
 return_type DRHWInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
-  return return_type::OK;
+    // Variable initialisation
+    string version   = "v1.0";
+    float  period    = 0.001;
+    int    losscount = 4;
+
+    float vel[6]       = {5, 5, 5, 5, 5, 5};  // Joint limits
+    float acc[6]       = {50, 50, 50, 50, 50, 50};
+    float vel_limit[6] = {100, 100, 100, 100, 100, 100};
+    float acc_limit[6] = {100, 100, 100, 100, 100, 100};
+
+    float q[6]     = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    float q_dot[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    float trq_g[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    float tau[6]   = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+    const float st    = 0.01;  // sampling time
+    const float ratio = 1;
+
+    const float  None  = -10000;
+    float        count = 0;
+    static float time  = 0;
+
+    float     home[6] = {0, 0, 0, 0, 0, 0};
+    TraParam  tra;
+    PlanParam plan;
+
+    std::this_thread::sleep_for(std::chrono::microseconds(1000));
+    cout << endl << endl << "Options: " << endl;
+    cout << " - q: quit" << endl;
+    cout << " - 1: connect real-time control" << endl;
+    cout << " - 2: setup real-time control" << endl;
+    cout << " - 3: start real-time control" << endl;
+    cout << " - 4: stop real-time control" << endl;
+    cout << " - 5: test servoj_rt() function" << endl;
+    cout << " - 7: test speedj_rt() function" << endl;
+    cout << " - 9: test torquej_rt() function" << endl;
+    cout << "input key: ";
+    char ch;
+    cin >> ch;
+    cout << "Selected key: " << ch << endl << endl;
+
+    switch (ch) {
+        case 'q':
+            cout << "Stopping real-time control" << endl;
+            Drfl.stop_rt_control();
+            cout << "Stopped" << endl;
+            break;
+        case '1':
+            cout << "Connecting to real-time control" << endl;
+            Drfl.connect_rt_control("192.168.127.100");
+            cout << "Connected" << endl;
+            break;
+        case '2':
+            cout << "Setting up real-time csontrol" << endl;
+            Drfl.set_rt_control_output(version, period, losscount);
+            cout << "Done" << endl;
+            break;
+
+        case '3':
+            cout << "Starting real-time control" << endl;
+            Drfl.start_rt_control();
+            cout << "Started" << endl;
+            break;
+
+        case '4':
+            cout << "Stopping real-time control" << endl;
+            Drfl.stop_rt_control();
+            cout << "Stopped" << endl;
+            break;
+
+        case '5':
+            cout << "servoj_rt() demo " << endl;
+            cout << "> Setting limits" << endl;
+            Drfl.set_velj_rt(vel);
+            Drfl.set_accj_rt(acc);
+            Drfl.set_velx_rt(100, 10);
+            Drfl.set_accx_rt(200, 20);    cin >> ch;
+
+            cout << "> Performing homing motion" << endl;
+            Drfl.movej(home, 60, 30);
+
+            cout << "> Set safety mode SAFETY_MODE_AUTONOMOUS, "
+                    "SAFETY_MODE_EVENT_MOVE"
+                    << endl;
+            Drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
+
+            cout << "> Planning motion" << endl;
+            count = 0;
+            time  = 0;
+            configure_plan_parameters(&plan);
+            plan_trajectory(&plan);
+
+            cout << "> Executing motion" << endl;
+            while (1) {
+                time     = (++count) * st;
+                tra.time = time;
+                generate_trajectory_sample(&plan, &tra);
+
+                for (int i = 0; i < 6; i++) tra.acc[i] = None;
+
+                Drfl.servoj_rt(tra.pos, tra.vel, tra.acc, st * ratio);
+
+                std::this_thread::sleep_for(std::chrono::microseconds(10000));
+            }
+            cout << "> Completed" << endl;
+            break;
+
+        case '7':
+            cout << "speedj_rt() demo " << endl;
+            cout << "> Setting limits" << endl;
+            Drfl.set_velj_rt(vel_limit);
+            Drfl.set_accj_rt(acc_limit);
+
+            cout << "> Performing homing motion" << endl;
+            Drfl.movej(home, 30, 30);
+
+            cout << "> Set safety mode SAFETY_MODE_AUTONOMOUS, "
+                    "SAFETY_MODE_EVENT_MOVE"
+                    << endl;
+            Drfl.set_safety_mode(
+                    SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE
+            );  // if this is removed the robot stops frequently
+
+            cout << "> Planning motion" << endl;
+            count = 0;
+            time  = 0;
+            configure_plan_parameters(&plan);
+            plan_trajectory(&plan);
+
+            cout << "> Executing motion" << endl;
+            while (1) {
+                time     = (++count) * st;
+                tra.time = time;
+                generate_trajectory_sample(&plan, &tra);
+
+                for (int i = 0; i < 6; i++) tra.acc[i] = None;
+
+                Drfl.speedj_rt(tra.vel, tra.acc, 0.01);
+
+                if (time > plan.time) {
+                    time = 0;
+                    Drfl.stop(STOP_TYPE_SLOW);
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(10000));
+            }
+            cout << "> Completed" << endl;
+            break;
+
+        case '9':  // torque
+            cout << "torque_rt() demo " << endl;
+            cout << "> Setting limits" << endl;
+            Drfl.set_velj_rt(vel);
+            Drfl.set_accj_rt(acc);
+            Drfl.set_velx_rt(100, 10);
+            Drfl.set_accx_rt(200, 20);
+
+            cout << "> Performing homing motion" << endl;
+            Drfl.movej(home, 60, 30);
+
+            cout << "> Set safety mode SAFETY_MODE_AUTONOMOUS, "
+                    "SAFETY_MODE_EVENT_MOVE"
+                    << endl;
+            Drfl.set_safety_mode(SAFETY_MODE_AUTONOMOUS, SAFETY_MODE_EVENT_MOVE);
+
+
+            cout << "> Planning motion" << endl;
+            count = 0;
+            time  = 0;
+            configure_plan_parameters(&plan);
+            plan_trajectory(&plan);
+
+            cout << "> Executing motion" << endl;
+            while (1) {
+                time     = (++count) * st;
+                tra.time = time;
+
+                memcpy(q,
+                        Drfl.read_data_rt()->actual_joint_position,
+                        sizeof(float) * 6);
+                memcpy(q_dot,
+                        Drfl.read_data_rt()->actual_joint_velocity,
+                        sizeof(float) * 6);
+                memcpy(trq_g, Drfl.read_data_rt()->gravity_torque, sizeof(float) * 6
+                );
+
+                generate_trajectory_sample(&plan, &tra);
+
+                for (int i = 0; i < 6; i++)
+                    tau[i] = trq_g[i] + 10 * (tra.pos[i] - q[i])
+                                + 1 * (tra.vel[i] - q_dot[i]);
+
+
+                Drfl.torque_rt(tau, 0);
+
+                if (time > plan.time) {
+                    time = 0;
+                    Drfl.stop(STOP_TYPE_SLOW);
+                    break;
+                }
+
+                // rt_task_wait_period(NULL);
+                std::this_thread::sleep_for(std::chrono::microseconds(1000));
+            }
+            break;
+        default:
+            break;
+    }
+    return return_type::OK;
 }
 
 DRHWInterface::~DRHWInterface()
